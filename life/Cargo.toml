@@ -4,9 +4,14 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-cortex-m = "0.7.7"
-cortex-m-rt = "0.7.5"
+cortex-m-rt = "0.7"
+critical-section-lock-mut = "0.1.2"
 embedded-hal = "1.0.0"
 microbit-v2 = "0.15.1"
+nanorand = { version = "0.7.0", default-features = false, features = ["pcg64"] }
 panic-rtt-target = "0.2.0"
 rtt-target = "0.6.1"
+
+[dependencies.cortex-m]
+version = "0.7.7"
+features = ["critical-section-single-core"]
