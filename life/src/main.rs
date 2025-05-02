@@ -5,58 +5,17 @@
 #![no_main]
 #![no_std]
 
-use core::sync::atomic::{
-    AtomicBool,
-    Ordering::{Acquire, Release},
-};
 use cortex_m_rt::entry;
-use critical_section_lock_mut::LockMut;
-use embedded_hal::digital::InputPin;
+use embedded_hal::{delay::DelayNs, digital::InputPin, digital::OutputPin};
 use microbit::{
-    board::Board,
-    display::blocking::Display,
-    hal::Timer,
-    hal::gpio::{Floating, Input, Pin},
-    hal::gpiote::Gpiote,
-    hal::pac::{self, interrupt},
-    hal::rng::Rng as HalRng,
+    board::Board, display::blocking::Display, hal::Timer, hal::gpio::Level, hal::rng::Rng as HalRng,
 };
 use nanorand::{Rng, pcg64::Pcg64};
 use panic_rtt_target as _;
-use rtt_target::rtt_init_print;
+use rtt_target::{rprintln, rtt_init_print};
 
 mod life;
 use life::*;
-
-struct AppState {
-    gpiote: Gpiote,
-    button_a: Pin<Input<Floating>>,
-    button_b: Pin<Input<Floating>>,
-}
-
-static APP_STATE: LockMut<AppState> = LockMut::new();
-static BUTTON_A_STATE: AtomicBool = AtomicBool::new(false);
-static BUTTON_B_STATE: AtomicBool = AtomicBool::new(false);
-
-#[interrupt]
-fn GPIOTE() {
-    APP_STATE.with_lock(|app_state| {
-        let button_a_changed = app_state.gpiote.channel0().is_event_triggered();
-        if button_a_changed {
-            let button_value = app_state.button_a.is_low().unwrap();
-            BUTTON_A_STATE.store(button_value, Release);
-        }
-
-        let button_b_changed = app_state.gpiote.channel1().is_event_triggered();
-        if button_b_changed {
-            let button_value = app_state.button_b.is_low().unwrap();
-            BUTTON_B_STATE.store(button_value, Release);
-        }
-
-        app_state.gpiote.channel0().reset_events();
-        app_state.gpiote.channel1().reset_events();
-    });
-}
 
 #[allow(clippy::needless_range_loop)]
 fn randomize(leds: &mut [[u8; 5]; 5], hal_rng: &mut HalRng) {
@@ -70,17 +29,20 @@ fn randomize(leds: &mut [[u8; 5]; 5], hal_rng: &mut HalRng) {
     }
 }
 
-fn complement(leds: &[[u8; 5]; 5]) -> [[u8; 5]; 5] {
-    let mut out = [[0u8; 5]; 5];
+fn make_sound<Speaker: OutputPin>(speaker: &mut Speaker, val: u16) {
+    for _ in 0u16..val {
+        speaker.set_high().unwrap();
+        speaker.set_low().unwrap();
+    }
+}
+
+#[allow(clippy::needless_range_loop)]
+fn complement(leds: &mut [[u8; 5]; 5]) {
     for i in 0..5 {
         for j in 0..5 {
-            match leds[i][j] {
-                0u8 => out[i][j] = 1u8,
-                _ => out[i][j] = 0u8,
-            }
+            leds[i][j] ^= 0b0000_0001;
         }
     }
-    out
 }
 
 #[entry]
@@ -90,59 +52,133 @@ fn main() -> ! {
     let mut timer = Timer::new(board.TIMER0);
     let mut display = Display::new(board.display_pins);
     let mut rng = HalRng::new(board.RNG);
-
-    let gpiote = Gpiote::new(board.GPIOTE);
-    let mut button_a = board.buttons.button_a.degrade();
-    let mut button_b = board.buttons.button_b.degrade();
-
-    unsafe { pac::NVIC::unmask(pac::Interrupt::GPIOTE) };
-    pac::NVIC::unpend(pac::Interrupt::GPIOTE);
-
-    let channel0 = gpiote.channel0();
-    channel0.input_pin(&button_a).toggle().enable_interrupt();
-    channel0.reset_events();
-
-    let channel1 = gpiote.channel1();
-    channel1.input_pin(&button_b).toggle().enable_interrupt();
-    channel1.reset_events();
-
-    let button_a_state = button_a.is_low().unwrap();
-    BUTTON_A_STATE.store(button_a_state, Release);
-
-    let button_b_state = button_b.is_low().unwrap();
-    BUTTON_B_STATE.store(button_b_state, Release);
-
-    let app_state = AppState {
-        gpiote,
-        button_a,
-        button_b,
-    };
-    APP_STATE.init(app_state);
+    let mut button_a = board.buttons.button_a;
+    let mut button_b = board.buttons.button_b;
+    let mut speaker = board
+        .speaker_pin
+        .into_push_pull_output(Level::High)
+        .degrade();
 
     let mut leds = [[0u8; 5]; 5];
     randomize(&mut leds, &mut rng);
 
-    // NOTE: This could overflow but probably won't
-    let mut frames = 5u64;
+    let mut counter_curr = 0u64;
+    let mut counter_prev = 0u64;
+    let mut random_counter = 0u32;
 
     loop {
-        let pressed_a = BUTTON_A_STATE.load(Acquire);
-        let pressed_b = BUTTON_B_STATE.load(Acquire);
-        if frames >= 5u64 && pressed_b {
-            leds = complement(&leds);
-            frames = 0u64;
+        let pressed_a = button_a.is_low().unwrap();
+        let pressed_b = button_b.is_low().unwrap();
+        if counter_curr - counter_prev >= 5u64 && pressed_b {
+            complement(&mut leds);
+            counter_prev = counter_curr;
         } else if pressed_a {
+            if random_counter >= 20 {
+                game(
+                    &mut display,
+                    &mut timer,
+                    &mut button_a,
+                    &mut button_b,
+                    &mut rng,
+                    &mut speaker,
+                );
+                random_counter = 0;
+            }
             randomize(&mut leds, &mut rng);
+            random_counter += 1;
         } else {
             life(&mut leds);
         }
 
         if done(&leds) {
             display.show(&mut timer, leds, 500);
-            frames += 5u64;
+            counter_curr += 5u64;
         } else {
             display.show(&mut timer, leds, 100);
-            frames += 1u64;
+            counter_curr += 1u64;
         }
+    }
+}
+
+#[allow(clippy::needless_range_loop)]
+fn clear(buf: &mut [[u8; 5]; 5]) {
+    for i in 0..5 {
+        for j in 0..5 {
+            buf[i][j] = 0;
+        }
+    }
+}
+
+fn game<T: DelayNs, ButtonA: InputPin, ButtonB: InputPin, Speaker: OutputPin>(
+    display: &mut Display,
+    timer: &mut T,
+    button_a: &mut ButtonA,
+    button_b: &mut ButtonB,
+    hal_rng: &mut HalRng,
+    speaker: &mut Speaker,
+) {
+    let mut buf = [[0u8; 5]; 5];
+    let mut lx = 2i16;
+    let mut rx = 3i16;
+    let mut new_bomb = true;
+    let mut bomb_x = 0i16;
+    let mut bomb_y = 0i16;
+    let mut score = 0i16;
+
+    let mut seed = [0u8; 16];
+    hal_rng.random(&mut seed);
+    let mut rng = Pcg64::new_seed(u128::from_ne_bytes(seed));
+
+    loop {
+        if score >= 10 {
+            break;
+        }
+
+        if new_bomb {
+            bomb_x = rng.generate_range(0_u8..=4) as i16; // There is a bug in nanorand it seems.
+            bomb_y = 0;
+            new_bomb = false;
+        } else {
+            bomb_y += 1;
+        }
+
+        let pressed_a = button_a.is_low().unwrap();
+        let pressed_b = button_b.is_low().unwrap();
+
+        if pressed_a {
+            lx -= 1;
+            rx -= 1;
+        }
+
+        if pressed_b {
+            lx += 1;
+            rx += 1;
+        }
+
+        if rx > 4 {
+            rx = 4;
+            lx = 3;
+        } else if lx < 0 {
+            lx = 0;
+            rx = 1;
+        }
+
+        clear(&mut buf);
+        buf[4][lx as usize] = 1;
+        buf[4][rx as usize] = 1;
+
+        if bomb_y < 4 {
+            buf[bomb_y as usize][bomb_x as usize] = 1;
+        } else if bomb_y == 4 && (bomb_x == lx || bomb_x == rx) {
+            score += 1;
+            rprintln!("Hit {}", score);
+            make_sound(speaker, 10);
+            new_bomb = true;
+        } else {
+            rprintln!("Miss");
+            new_bomb = true;
+        }
+
+        display.show(timer, buf, 100);
     }
 }
