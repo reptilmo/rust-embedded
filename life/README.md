@@ -7,3 +7,5 @@ I think the button presses are a bit unreliable. I tried interrupt implementatio
 
 If you press the left button (randomize) enough times you will get into the game mode. In the game you have to catch the “bomb” falling down with the platform at the bottom. Move the platform left or right with left and right buttons. Catch the bomb 10 times to ge back into assignment mode. This game would benefit from a little sound, but I couldn’t figure out how to get the speaker going.
 
+I made sound work better, somehow when to degrade the pin things don't work the same way when you toggle it with set_high set_low.
+

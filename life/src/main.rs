@@ -29,10 +29,12 @@ fn randomize(leds: &mut [[u8; 5]; 5], hal_rng: &mut HalRng) {
     }
 }
 
-fn make_sound<Speaker: OutputPin>(speaker: &mut Speaker, val: u16) {
+fn make_sound<D: DelayNs, Speaker: OutputPin>(delay: &mut D, speaker: &mut Speaker, val: u16) {
     for _ in 0u16..val {
         speaker.set_high().unwrap();
+        delay.delay_us(500);
         speaker.set_low().unwrap();
+        delay.delay_us(500);
     }
 }
 
@@ -56,8 +58,8 @@ fn main() -> ! {
     let mut button_b = board.buttons.button_b;
     let mut speaker = board
         .speaker_pin
-        .into_push_pull_output(Level::High)
-        .degrade();
+        .into_push_pull_output(Level::Low);
+        //.degrade();
 
     let mut leds = [[0u8; 5]; 5];
     randomize(&mut leds, &mut rng);
@@ -172,7 +174,7 @@ fn game<T: DelayNs, ButtonA: InputPin, ButtonB: InputPin, Speaker: OutputPin>(
         } else if bomb_y == 4 && (bomb_x == lx || bomb_x == rx) {
             score += 1;
             rprintln!("Hit {}", score);
-            make_sound(speaker, 10);
+            make_sound(timer, speaker, 10);
             new_bomb = true;
         } else {
             rprintln!("Miss");
