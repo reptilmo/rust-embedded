@@ -1,4 +1,2 @@
 # Drop
 ## Kostya Leshenko 
-
-

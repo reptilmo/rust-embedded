@@ -14,6 +14,7 @@ use microbit::{
 };
 use panic_rtt_target as _;
 use rtt_target::rtt_init_print;
+use rtt_target::rprintln;
 
 use critical_section_lock_mut::LockMut;
 use lsm303agr::{AccelMode, AccelOutputDataRate, Lsm303agr};
@@ -83,7 +84,7 @@ fn main() -> ! {
         )
         .unwrap();
 
-    let mut filter = Filter::new(0.8);
+    let mut filter = Filter::new(0.4);
 
     unsafe {
         board.NVIC.set_priority(pac::Interrupt::TIMER1, 128);
@@ -100,9 +101,10 @@ fn main() -> ! {
                 data.z_mg() as f32 * 0.001,
             );
             let accel = x * x + y * y + z * z;
-            if accel > 2.5 {
+            rprintln!("Accel: {}", accel);
+            if accel < 0.25 {
                 DISPLAY.with_lock(|display| display.show(&BANG));
-                for _ in 0u16..10 {
+                for _ in 0u16..7 {
                     speaker.set_high().unwrap();
                     timer0.delay_us(500);
                     speaker.set_low().unwrap();
